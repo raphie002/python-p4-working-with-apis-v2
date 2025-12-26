@@ -1,57 +1,89 @@
-import requests
+# lib/open_library_api.py
+import requests # type: ignore
 import json
+from flask import Flask
+from flask_sqlalchemy import SQLAlchemy # type: ignore
 
+# --- DATABASE SETUP ---
+app = Flask(__name__)
+# This creates a local file 'history.db' in your project folder
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///history.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
 
+# Define what the database table looks like
+class SearchHistory(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String)
+    author = db.Column(db.String)
+    year = db.Column(db.String)
+
+# Initialize the database file
+with app.app_context():
+    db.create_all()
+
+# --- API LOGIC ---
 class Search:
 
-    def get_search_results(self):
-        search_term = "the lord of the rings"
-
-        search_term_formatted = search_term.replace(" ", "+")
-        fields = ["title", "author_name"]
-        # formats the list into a comma separated string
-        # output: "title,author_name"
-        fields_formatted = ",".join(fields)
-        limit = 1
-
-        URL = f"https://openlibrary.org/search.json?title={search_term_formatted}&fields={fields_formatted}&limit={limit}"
-
-        response = requests.get(URL)
-        return response.content
-
-    def get_search_results_json(self):
-        search_term = "the lord of the rings"
-
-        search_term_formatted = search_term.replace(" ", "+")
-        fields = ["title", "author_name"]
-        fields_formatted = ",".join(fields)
-        limit = 1
-
-        URL = f"https://openlibrary.org/search.json?title={search_term_formatted}&fields={fields_formatted}&limit={limit}"
-        print(URL)
-        response = requests.get(URL)
-        return response.json()
-
     def get_user_search_results(self, search_term):
+        # Format the search term for the URL (replace spaces with +)
         search_term_formatted = search_term.replace(" ", "+")
-        fields = ["title", "author_name"]
+        
+        # Define the fields we want to retrieve
+        fields = ["title", "author_name", "first_publish_year"]
         fields_formatted = ",".join(fields)
-        limit = 1
+        limit = 5
 
         URL = f"https://openlibrary.org/search.json?title={search_term_formatted}&fields={fields_formatted}&limit={limit}"
 
-        response = requests.get(URL).json()
-        response_formatted = f"Title: {response['docs'][0]['title']}\nAuthor: {response['docs'][0]['author_name'][0]}"
-        return response_formatted
+        try:
+            response = requests.get(URL)
+            
+            # Check if the API request was successful
+            if response.status_code == 200:
+                data = response.json()
+                docs = data.get('docs', [])
 
+                if docs:
+                    results_list = []
+                    
+                    # Use app_context to allow database interaction
+                    with app.app_context():
+                        for index, book in enumerate(docs, start=1):
+                            # Extract data safely using .get()
+                            title = book.get('title', 'Unknown Title')
+                            authors = book.get('author_name', ['Unknown Author'])
+                            author = authors[0]
+                            year = str(book.get('first_publish_year', 'Year Unknown'))
 
-# results = Search().get_search_results()
-# print(results)
+                            # 1. Format for terminal display
+                            results_list.append(f"{index}. {title} ({year}) by {author}")
 
-# results_json = Search().get_search_results_json()
-# print(json.dumps(results_json, indent=1))
+                            # 2. Save to Database
+                            new_entry = SearchHistory(title=title, author=author, year=year)
+                            db.session.add(new_entry)
+                        
+                        # Save all changes to history.db
+                        db.session.commit()
+                    
+                    return "\n".join(results_list)
+                else:
+                    return "No books found for that search term."
+            else:
+                return f"Error: Received status code {response.status_code} from server."
+        
+        except Exception as e:
+            return f"An error occurred: {e}"
 
-search_term = input("Enter a book title: ")
-result = Search().get_user_search_results(search_term)
-print("Search Result:\n")
-print(result)
+# --- EXECUTION ---
+if __name__ == "__main__":
+    choice = input("Enter 's' to Search or 'v' to View History: ").lower()
+    
+    if choice == 's':
+        search_term = input("Enter a book title: ")
+        result = Search().get_user_search_results(search_term)
+        print("\n" + result)
+    elif choice == 'v':
+        view_history() # type: ignore
+    else:
+        print("Invalid choice.")
